@@ -1,4 +1,3 @@
-# king-of-the-hill
 # Game: King of the Hill
 Le roi de la colline (ou roi de la montage) est un jeu ou un joueur doit demeurer au sommet d'une colline contre les efforts des adversaires qui essayent de le détrôner.
 Dans un cet exercice vous devrez implémenter ce jeu sur la Blockchain Ethereum avec un smart contract.
