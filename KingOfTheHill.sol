@@ -3,125 +3,143 @@
 pragma solidity ^0.8.0;
 
 import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/Address.sol";
+import "./Ownable.sol";
 
-
-contract KingOfTheHill{
+contract KingOfTheHill is Ownable {
     using Address for address payable;
-    
-    //States variables
-    
-    address private _owner;
-    uint256 private _percentage;
-    uint256 private _profit;
-    uint256 private _tax;
+
+    mapping(address => uint256) private _rewards;
+    address private _potOwner;
+    uint256 private _startBlock;
     uint256 private _pot;
-    mapping(address => uint256) private _balances;
-    uint256 constant private MAX_PLAYERS = 50; // obligation d'initiliaser la variable
-    
-    address public currentKing;
-    uint256 public lastKingBlock;
-    
-    
-    //Events
-    
-    event Deposited(address indexed sender, uint256 amount);
-    
-    event Transfered(address indexed sender, address indexed recipient, uint256 amount);
-    
-    
-    
-    //constructor
-    
-    constructor (uint256 tax_, uint256 lastKingBlock, uint256 pot_) public payable {
-        require(tax_<= 10, "KingOfTheHill: maximum tax 10 pourcent")
-        _owner = msg.sender;
-        _tax = tax_;
-        lastKingBlock = block.number;
-        
-    }
-    
-    constructor(address owner_, uint256 tax_) Ownable(owner_) {
-        require(tax_ >= 0 && tax_ <= 100, "KingOfTheHill: Invalid percentage");
-        _tax = tax_;
-        _owner = owner_;
-    }
-    
-    //Modifiers
-    
-    modifier onlyOwner() {
-        require(msg.sender == _owner, "Ownable: Only owner can call this function");
-        _;
+    uint256 private _gain;
+    uint256 private immutable _nbBlocks;
+    uint256 private immutable _rewardPercentage;
+    uint256 private immutable _gainPercentage;
+    uint256 private immutable _seedPercentage;
+
+    // Events ???
+
+    constructor(
+        address owner_,
+        uint256 nbBlocks_,
+        uint256 rewardPercentage_,
+        uint256 gainPercentage_
+    ) payable Ownable(owner_) {
+        require(msg.value > 0, "KingOfTheHill: pot need a seed");
+        require(
+            nbBlocks_ > 0,
+            "KingOfTheHill: nb blocks to win cannot be zero"
+        );
+        require(
+            rewardPercentage_ + gainPercentage_ < 100,
+            "KingOfTheHill: invalid percentages"
+        );
+        _pot = msg.value;
+        _nbBlocks = nbBlocks_;
+        _rewardPercentage = rewardPercentage_;
+        _gainPercentage = gainPercentage_;
+        _seedPercentage = rewardPercentage_ > gainPercentage_
+            ? rewardPercentage_ - gainPercentage_
+            : gainPercentage_ - rewardPercentage_;
     }
 
-    modifier onlyGoodPercentage(uint256 percentage) {
-        require( percentage >= 0 && percentage <= 100, "KingOfTheHill: Not a valid percentage");
-         _;
+    function buyPot() external payable {
+        if (!isRoundRunning() && _potOwner != address(0)) {
+            uint256 reward = (_pot * _rewardPercentage) / 100;
+            uint256 gain_ = (_pot * _gainPercentage) / 100;
+            _pot -= reward + gain_;
+            _rewards[_potOwner] += reward;
+            _gain += gain_;
+            _potOwner = address(0);
+        }
+        require(
+            msg.sender != _potOwner,
+            "KingOfTheHill: sender already owns pot"
+        );
+        require(
+            msg.value >= _pot * 2,
+            "KingOfTheHill: not enough ether for buying pot"
+        );
+        _potOwner = msg.sender;
+        _startBlock = block.number;
+        uint256 change = msg.value - _pot * 2;
+        _pot += _pot * 2;
+        if (change > 0) {
+            payable(msg.sender).sendValue(change);
+        }
     }
-    
-    
-    
-    //Fonctions
-    
-    receive() external payable {
-        _deposit(msg.sender, msg.value);
-    }
-    
-    function _deposit(address sender, uint256 amount) private {
-        _balances[sender] += amount;
-        _depositTime[sender] = block.timestamp;
-        emit Deposited(sender, amount);
-    }
-    
-    function setTax(uint256 percentage) public onlyOwner onlyGoodPercentage(percentage) {
-        require(percentage_ >= 0 && percentage_ <= 100, "SmartWallet: Invalid percentage");
-        _percentage = percentage_;
-    }
-    
-    
-    
-    function tax() public view returns (uint256) {
-        return _tax;
-    }
-    
-    function withdrawProfit() public onlyOwner {
-        require(_profit > 0, "SmartWallet: can not withdraw 0 ether");
-        uint256 amount = _profit;
-        _profit = 0;
+
+    function withdrawReward() public {
+        require(
+            _rewards[msg.sender] > 0,
+            "KingOfTheHill: can not withdraw 0 reward"
+        );
+        uint256 amount = _rewards[msg.sender];
+        _rewards[msg.sender] = 0;
         payable(msg.sender).sendValue(amount);
     }
-    
-    function Transfer(address recipient, uint256 amount) public {
-        require(
-            _balances[msg.sender] > 0,
-            "SmartWallet: can not transfer 0 ether"
-        );
-        require(
-            _balances[msg.sender] >= amount,
-            "SmartWallet: Not enough Ether to transfer"
-        );
-        require(
-            recipient != address(0),
-            "SmartWallet: transfer to the zero address"
-        );
-        _balances[msg.sender] -= amount;
-        _balances[recipient] += amount;
-        emit Transfered(msg.sender, recipient, amount, block.timestamp);
+
+    function withdrawGain() public onlyOwner {
+        require(_gain > 0, "KingOfTheHill: can not withdraw 0 gain");
+        uint256 amount = _gain;
+        _gain = 0;
+        payable(msg.sender).sendValue(amount);
     }
-    
-    function total() public view returns (uint256) {
-        return address(this).balance;
+
+    function isRoundRunning() public view returns (bool) {
+        return
+            _startBlock + _nbBlocks > block.number && _potOwner != address(0)
+                ? true
+                : false;
     }
-    
-    function tax() public view returns (uint256) {
-        return _percentage;
+
+    function winningBlock() public view returns (uint256) {
+        return isRoundRunning() ? _startBlock + _nbBlocks : 0;
     }
-    
-    function profit() public view returns (uint256) {
-        return _profit;
+
+    // TODO check off by one error
+    function remainingBlock() public view returns (uint256) {
+        return isRoundRunning() ? _startBlock + _nbBlocks - block.number : 0;
     }
-    
-    function owner() public view returns (address) {
-        return _owner;
+
+    function priceOfPot() public view returns (uint256) {
+        if (isRoundRunning() || _potOwner == address(0)) {
+            return _pot * 2;
+        } else {
+            return (_pot * _seedPercentage * 2) / 100;
+        }
     }
-    
+
+    function rewardOf(address account) public view returns (uint256) {
+        return _rewards[account];
     }
+
+    function potOwner() public view returns (address) {
+        return _potOwner;
+    }
+
+    function pot() public view returns (uint256) {
+        return _pot;
+    }
+
+    function gain() public view returns (uint256) {
+        return _gain;
+    }
+
+    function nbBlocks() public view returns (uint256) {
+        return _nbBlocks;
+    }
+
+    function rewardPercentage() public view returns (uint256) {
+        return _rewardPercentage;
+    }
+
+    function gainPercentage() public view returns (uint256) {
+        return _gainPercentage;
+    }
+
+    function seedPercentage() public view returns (uint256) {
+        return _seedPercentage;
+    }
+}
